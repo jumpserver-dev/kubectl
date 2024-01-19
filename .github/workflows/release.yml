@@ -1,0 +1,65 @@
+on:
+  push:
+    branches:
+      - master
+  schedule:
+    - cron: '0 1 * * *'
+
+name: Checkout and Create Release Version
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Check Version
+        id: get-version
+        run: |
+          version=$(curl -s 'https://cdn.dl.k8s.io/release/stable.txt')
+          echo "version=${version}" >> $GITHUB_OUTPUT
+
+      - name: Check Release
+        id: check-release
+        run: |
+          gh release view ${{ steps.get-version.outputs.version }} >/dev/null 2>&1 || echo "create=1" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Buile
+        id: check-build
+        run: |
+          gh release view ${{ steps.get-version.outputs.version }} | grep kubectl-*.tar.gz >/dev/null 2>&1 || echo "build=1" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Tag
+        run: |
+          git config --global user.name "${GITHUB_ACTOR}"
+          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git tag -a ${{ steps.get-version.outputs.version }} -m "Release ${{ steps.get-version.outputs.version }}" || echo "tag exists"
+          git push origin ${{ steps.get-version.outputs.version }} || echo "tag exists"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get Source
+        if: steps.check-build.outputs.build == 1
+        run: |
+          bash prepare.sh ${{ steps.get-version.outputs.version }}
+          ls -al build/
+
+      - name: Create Release
+        if: steps.check-release.outputs.create == 1
+        run: |
+          gh release create ${{ steps.get-version.outputs.version }} --notes "Release ${{ steps.get-version.outputs.version }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upgrade Release
+        if: steps.check-build.outputs.build == 1
+        run: |
+          gh release upload ${{ steps.get-version.outputs.version }} build/*.tar.gz
+          gh release upload ${{ steps.get-version.outputs.version }} build/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
